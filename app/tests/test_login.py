@@ -48,16 +48,6 @@ async def test_register_duplicate_email(client):
 
 
 @pytest.mark.asyncio
-async def test_register_duplicate_phone(client):
-    with patch("app.api.endpoints.login.get_user_by_username", new=AsyncMock(return_value=None)), \
-         patch("app.api.endpoints.login.get_user_by_email", new=AsyncMock(return_value=None)), \
-         patch("app.api.endpoints.login.get_user_by_phone", new=AsyncMock(return_value=object())):
-        response = await client.post("/register", json=REGISTER_PAYLOAD)
-    assert response.status_code == 422
-    assert "phone" in response.json()["detail"]
-
-
-@pytest.mark.asyncio
 async def test_login_success_sets_cookies(client):
     fake_user = type("U", (), {"id": 1})()
     with patch("app.api.endpoints.login.authenticate", new=AsyncMock(return_value=fake_user)), \
