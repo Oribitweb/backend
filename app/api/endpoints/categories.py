@@ -51,7 +51,7 @@ async def list_categories(
     """
     Get list of categories with pagination and search
     """
-    categories, total = category_crud.get_multi(db, skip=skip, limit=limit, search=search)
+    categories, total = await category_crud.get_multi(db, skip=skip, limit=limit, search=search)
     
     pages = ceil(total / limit) if limit > 0 else 0
     
