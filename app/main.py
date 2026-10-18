@@ -13,6 +13,7 @@ from app.api.endpoints.categories import router as categories_router
 from app.api.endpoints.public import router as video_public_router
 from app.api.endpoints.comments import router as comments_router
 from app.api.endpoints.video_stats import router as video_stats_router
+from app.api.endpoints.dashboard import router as dashboard_router
 from app.core.database import Base, engine
 from app.ws.manager import manager
 
@@ -43,8 +44,8 @@ patch_fastapi(app)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost",   # your frontend dev server
-        "http://127.0.0.1",
+        "http://localhost:5500",
+        "http://127.0.0.1:5500",
         # add your production domain later
     ],
     allow_credentials=True,
@@ -60,3 +61,4 @@ app.include_router(categories_router)
 app.include_router(video_public_router)
 app.include_router(comments_router)
 app.include_router(video_stats_router)
+app.include_router(dashboard_router)

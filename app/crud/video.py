@@ -87,6 +87,68 @@ class CRUDVideo:
 
         return and_(*conditions)
 
+    @staticmethod
+    def _channel_feed_filter(
+        channel_id: int,
+        status: Optional[VideoStatus] = None,
+        visibility: Optional[VideoVisibility] = None,
+    ):
+        """
+        Shared WHERE clause for a channel owner's own listing:
+        - not soft-deleted
+        - belongs to the given channel
+        - NO visibility/readiness filtering — owners see everything
+          (draft, processing, failed, private, scheduled, etc.)
+        """
+        conditions = [
+            Video.deleted_at.is_(None),
+            Video.channel_id == channel_id,
+        ]
+        if status is not None:
+            conditions.append(Video.status == status)
+        if visibility is not None:
+            conditions.append(Video.visibility == visibility)
+
+        return and_(*conditions)
+
+    async def get_by_channel(
+        self,
+        db: AsyncSession,
+        channel_id: int,
+        skip: int = 0,
+        limit: int = 24,
+        status: Optional[VideoStatus] = None,
+        visibility: Optional[VideoVisibility] = None,
+    ) -> List[Video]:
+        """Paginated feed of a channel's own videos (any status/visibility), newest first."""
+        query = (
+            select(Video)
+            .options(
+                joinedload(Video.channel),
+                joinedload(Video.stats),
+                joinedload(Video.public_id),
+            )
+            .where(self._channel_feed_filter(channel_id, status, visibility))
+            .order_by(Video.created_at.desc())
+            .offset(skip)
+            .limit(limit)
+        )
+        result = await db.execute(query)
+        return list(result.unique().scalars().all())
+
+    async def count_by_channel(
+        self,
+        db: AsyncSession,
+        channel_id: int,
+        status: Optional[VideoStatus] = None,
+        visibility: Optional[VideoVisibility] = None,
+    ) -> int:
+        query = select(func.count(Video.id)).where(
+            self._channel_feed_filter(channel_id, status, visibility)
+        )
+        result = await db.execute(query)
+        return result.scalar_one()
+    
     async def get_public_feed(
         self,
         db: AsyncSession,
