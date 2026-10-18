@@ -47,12 +47,6 @@ async def register_user(
             detail="Email already registered"
         )        
     
-    existing_phone = await get_user_by_phone(db, request.phone)
-    if existing_phone:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="A user with this phone is already registered"
-        )        
     # Hash password
     password_hash = get_password_hash(request.password)
 
@@ -105,7 +99,8 @@ async def login_user(
             value=refresh_token,
             **cookie_config
         )
-
+        # Update user last login
+        user.last_login = datetime.now(timezone.utc)
         return {
             "access_token": access_token,
             "refresh_token": refresh_token

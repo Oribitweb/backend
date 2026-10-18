@@ -40,17 +40,8 @@ class UserBase(BaseModel):
 class UserCreate(UserBase, PasswordValidationMixin):
     password: str = Field(...)
     confirm_password: str = Field(description="Confirm password")
-    phone: Optional[str] = Field(default=None, min_length=11, max_length=11)
     avatar_url: Optional[str] = None
     
-    @field_validator('phone')
-    @classmethod
-    def validate_iran_phone(cls, v):
-        if v is not None:
-            # Iranian mobile: starts with 09 and has 11 digits total
-            if not re.match(r'^09[0-9]{9}$', v):
-                raise ValueError('Invalid Iranian phone number. Must be 11 digits starting with 09')
-        return v
 
 class UserLogin(BaseModel):
     username: str

@@ -24,7 +24,6 @@ class User(Base):
     username = Column(String(30), unique=True, index=True, nullable=False)
     email = Column(String(250), unique=True, index=True, nullable=False)
     password_hash = Column(String, nullable=False) 
-    phone = Column(String(20), unique=True, nullable=True)
     avatar_url = Column(String(500))
     last_login = Column(DateTime)
     is_verified = Column(Boolean, default=False)
