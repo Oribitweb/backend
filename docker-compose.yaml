@@ -7,16 +7,21 @@ services:
       - POSTGRES_PASSWORD=postgres
       - POSTGRES_DB=postgres
     volumes:
-      - ./postgres/data:/var/lib/postgres/data
+      # FIX: correct PGDATA path (was /var/lib/postgres/data)
+      # NOTE: on the host, ensure ./postgres/data is writable by uid 70 (postgres in alpine),
+      # e.g. `sudo chown -R 70:70 ./postgres/data`, otherwise initdb fails and the
+      # container exits -> the `db` DNS name disappears.
+      - ./postgres/data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "postgres", "-d", "postgres"]
-      interval: 10s
-      timeout: 30s
-      retries: 5
-      start_period: 30s
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
     ports:
-      - 5432:5432
-  
+      - "5432:5432"
+    restart: unless-stopped
+
   minio:
     image: minio/minio:latest
     container_name: minio
@@ -25,25 +30,26 @@ services:
       - MINIO_ROOT_PASSWORD=minioadmin123
     command: server /data --console-address ":9001"
     ports:
-      - "9000:9000"  # S3 API port
-      - "9001:9001"  # Web console port
+      - "9000:9000"
+      - "9001:9001"
     volumes:
       - ./minio/data:/data
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 30s
-      timeout: 20s
-      retries: 3
+      interval: 10s
+      timeout: 5s
+      retries: 5
       start_period: 10s
+    restart: unless-stopped
 
   create-bucket:
     image: minio/mc:latest
     container_name: create-bucket
     depends_on:
-      - minio
+      minio:
+        condition: service_healthy
     entrypoint: >
       /bin/sh -c "
-      sleep 5;
       mc alias set local http://minio:9000 minioadmin minioadmin123;
       mc mb local/video-bucket --ignore-existing;
       mc anonymous set download local/video-bucket;
@@ -58,71 +64,78 @@ services:
       - "6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-  
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
   backend:
-    build: 
+    build:
       context: .
       dockerfile: Dockerfile.dev
     container_name: backend
     depends_on:
-      - db
-      - minio
+      db:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     environment:
       - SECRET_KEY=K3IG57oVaoO/d0qzs/JZh1LmGHE4YYI0xPP1xm+oANc=
       - SQLALCHEMY_DATABASE_URL=postgresql+asyncpg://postgres:postgres@db:5432/postgres
+      # If your app reads DATABASE_URL instead, set it too:
+      # - DATABASE_URL=postgresql+asyncpg://postgres:postgres@db:5432/postgres
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
       - ALGORITHM=HS256
-      # S3/MinIO configuration
-      - S3_ENDPOINT=http://minio:9000  # For boto3 client (from inside Docker container)
-      - S3_PUBLIC_ENDPOINT=http://localhost:9000  # For browser presigned URLs
+      - S3_ENDPOINT=http://minio:9000
+      - S3_PUBLIC_ENDPOINT=http://localhost:9000
       - S3_ACCESS_KEY=minioadmin
       - S3_SECRET_KEY=minioadmin123
       - S3_BUCKET_NAME=video-bucket
       - S3_REGION=us-east-1
       - S3_USE_PATH_STYLE=true
       - S3_USE_SSL=false
-      # Sprite image
       - SPRITE_INTERVAL=5
       - SPRITE_TILE_WIDTH=160
       - SPRITE_TILE_HEIGHT=90
       - SPRITE_COLUMNS=10
       - SPRITE_MAX_TILES=100
     ports:
-      - 8000:8000
+      - "8000:8000"
     command: bash -c 'fastapi dev --host 0.0.0.0 --port 8000 main.py'
     volumes:
       - ./app:/usr/src/app
+    restart: unless-stopped
 
   celery_worker:
     build:
       context: .
       dockerfile: Dockerfile.dev
     container_name: celery_worker
-    command: bash -c 'celery -A core.celery_app worker --concurrency=6  --loglevel=info'
+    command: bash -c 'celery -A core.celery_app worker --concurrency=6 --loglevel=info'
     depends_on:
-      - db
-      - minio
-      - redis
+      db:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     environment:
       - SECRET_KEY=K3IG57oVaoO/d0qzs/JZh1LmGHE4YYI0xPP1xm+oANc=
       - SQLALCHEMY_DATABASE_URL=postgresql+asyncpg://postgres:postgres@db:5432/postgres
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
       - ALGORITHM=HS256
-      # S3/MinIO configuration
-      - S3_ENDPOINT=http://minio:9000  # For boto3 client (from inside Docker container)
-      - S3_PUBLIC_ENDPOINT=http://localhost:9000  # For browser presigned URLs
+      - S3_ENDPOINT=http://minio:9000
+      - S3_PUBLIC_ENDPOINT=http://localhost:9000
       - S3_ACCESS_KEY=minioadmin
       - S3_SECRET_KEY=minioadmin123
       - S3_BUCKET_NAME=video-bucket
       - S3_REGION=us-east-1
       - S3_USE_PATH_STYLE=true
       - S3_USE_SSL=false
-      # Sprite image
       - SPRITE_INTERVAL=5
       - SPRITE_TILE_WIDTH=160
       - SPRITE_TILE_HEIGHT=90
@@ -131,42 +144,46 @@ services:
     volumes:
       - ./app:/usr/src/app
     restart: unless-stopped
+
   celery_beat:
-      build:
-        context: .
-        dockerfile: Dockerfile.dev
-      container_name: celery_beat
-      command: bash -c 'celery -A core.celery_app beat --loglevel=info'
-      depends_on:
-        - db
-        - redis
-      environment:
-        - SECRET_KEY=K3IG57oVaoO/d0qzs/JZh1LmGHE4YYI0xPP1xm+oANc=
-        - SQLALCHEMY_DATABASE_URL=postgresql+asyncpg://postgres:postgres@db:5432/postgres
-        - CELERY_BROKER_URL=redis://redis:6379/0
-        - CELERY_RESULT_BACKEND=redis://redis:6379/0
-        - ALGORITHM=HS256
-        - S3_ENDPOINT=http://minio:9000
-        - S3_PUBLIC_ENDPOINT=http://localhost:9000
-        - S3_ACCESS_KEY=minioadmin
-        - S3_SECRET_KEY=minioadmin123
-        - S3_BUCKET_NAME=video-bucket
-        - S3_REGION=us-east-1
-        - S3_USE_PATH_STYLE=true
-        - S3_USE_SSL=false
-        - SPRITE_INTERVAL=5
-        - SPRITE_TILE_WIDTH=160
-        - SPRITE_TILE_HEIGHT=90
-        - SPRITE_COLUMNS=10
-        - SPRITE_MAX_TILES=100
-      volumes:
-        - ./app:/usr/src/app
-      restart: unless-stopped
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: celery_beat
+    command: bash -c 'celery -A core.celery_app beat --loglevel=info'
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      - SECRET_KEY=K3IG57oVaoO/d0qzs/JZh1LmGHE4YYI0xPP1xm+oANc=
+      - SQLALCHEMY_DATABASE_URL=postgresql+asyncpg://postgres:postgres@db:5432/postgres
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - ALGORITHM=HS256
+      - S3_ENDPOINT=http://minio:9000
+      - S3_PUBLIC_ENDPOINT=http://localhost:9000
+      - S3_ACCESS_KEY=minioadmin
+      - S3_SECRET_KEY=minioadmin123
+      - S3_BUCKET_NAME=video-bucket
+      - S3_REGION=us-east-1
+      - S3_USE_PATH_STYLE=true
+      - S3_USE_SSL=false
+      - SPRITE_INTERVAL=5
+      - SPRITE_TILE_WIDTH=160
+      - SPRITE_TILE_HEIGHT=90
+      - SPRITE_COLUMNS=10
+      - SPRITE_MAX_TILES=100
+    volumes:
+      - ./app:/usr/src/app
+    restart: unless-stopped
+
   locust:
     container_name: locust
     image: locustio/locust
     ports:
-     - "8089:8089"
+      - "8089:8089"
     volumes:
       - ./app/core/locust:/mnt/locust
     command: -f /mnt/locust/locustfile.py
@@ -175,6 +192,7 @@ services:
     image: mher/flower:0.9.7
     command: ['flower', '--broker=redis://redis:6379/0', '--port=5555']
     ports:
-      - 5555:5555
+      - "5555:5555"
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
