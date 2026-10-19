@@ -9,13 +9,13 @@ WORKDIR /usr/src/app
 ENV PYTHONPATH=/usr/src
 
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc \
-    libpq-dev \
-    ffmpeg \
-    libjpeg-dev \
-    zlib1g-dev \
-    && rm -rf /var/lib/apt/lists/*
+# RUN apt-get update && apt-get install -y --no-install-recommends \
+#     gcc \
+#     libpq-dev \
+#     ffmpeg \
+#     libjpeg-dev \
+#     zlib1g-dev \
+#     && rm -rf /var/lib/apt/lists/*
 
 COPY ./requirements.txt .
 
