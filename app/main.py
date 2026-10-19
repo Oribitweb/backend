@@ -35,10 +35,6 @@ app = FastAPI(
     title="Orbit",
     description="Sharing video service",
     version="0.1.0",
-<<<<<<< HEAD
-=======
-    docs_url=None,
->>>>>>> d56f2ff (chore: remove fastapi-swagger)
     lifespan=lifespan
 )
 
