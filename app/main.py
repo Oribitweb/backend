@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 from app.core.redis import close_redis
 
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 from fastapi_swagger import patch_fastapi
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -52,6 +53,11 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
+
+@app.get("/is-ready", status_code=200)
+async def readiness():
+    return JSONResponse(content="ok")
+
 
 app.include_router(login_router)
 app.include_router(users_router)
