@@ -83,7 +83,7 @@ async def login_user(
         cookie_config = {
             "httponly": True,
             "secure": False,  # Set to False for testing with HTTP
-            "samesite": "lax",
+            "samesite": "none",
             "expires": datetime.now(timezone.utc) + timedelta(days=7)
         }
 
