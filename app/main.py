@@ -3,7 +3,6 @@ from app.core.redis import close_redis
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
-from fastapi_swagger import patch_fastapi
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.endpoints.users import router as users_router 
@@ -33,13 +32,11 @@ async def lifespan(app:FastAPI):
 
 
 app = FastAPI(
-    title="Todo Application",
+    title="Orbit",
+    description="Sharing video service",
     version="0.1.0",
-    docs_url=None,
-    swagger_ui_oauth2_redirect_url=None,
     lifespan=lifespan
 )
-patch_fastapi(app)
 
 
 app.add_middleware(
