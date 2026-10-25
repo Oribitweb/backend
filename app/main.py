@@ -15,7 +15,15 @@ from app.api.endpoints.comments import router as comments_router
 from app.api.endpoints.video_stats import router as video_stats_router
 from app.api.endpoints.dashboard import router as dashboard_router
 from app.core.database import Base, engine
+from app.core.config import settings
 from app.ws.manager import manager
+import sentry_sdk
+
+sentry_sdk.init(
+    dsn=settings.SENTRY_DSN,
+    # Add data like request headers and IP for users,
+    # see https://docs.sentry.io/platforms/python/data-management/data-collected/ for more info
+)
 
 
 @asynccontextmanager
@@ -53,6 +61,10 @@ app.add_middleware(
 async def readiness():
     return JSONResponse(content="ok")
 
+# Verify sentry
+@app.get("/sentry-debug")
+async def trigger_error():
+    division_by_zero = 1 / 0
 
 app.include_router(login_router)
 app.include_router(users_router)

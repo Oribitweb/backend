@@ -18,3 +18,4 @@ pytest-cov
 fakeredis
 httpx
 aiosqlite
+sentry-sdk

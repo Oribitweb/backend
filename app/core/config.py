@@ -36,6 +36,9 @@ class Settings(BaseSettings):
     # Redis for websocket pupsub
     REDIS_WS_PUBSUB: str = "redis://redis:6379/1"
 
+    # Sentry
+    SENTRY_DSN: str = "https://a988f88a537f6820a0eb3ef6d7a87265@sentry.hamravesh.com/11154"
+
 
 
 @lru_cache
