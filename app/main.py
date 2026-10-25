@@ -62,9 +62,9 @@ async def readiness():
     return JSONResponse(content="ok")
 
 # Verify sentry
-@app.get("/sentry-debug")
-async def trigger_error():
-    division_by_zero = 1 / 0
+# @app.get("/sentry-debug")
+# async def trigger_error():
+#     division_by_zero = 1 / 0
 
 app.include_router(login_router)
 app.include_router(users_router)
