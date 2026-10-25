@@ -22,10 +22,14 @@ import sentry_sdk
 from celery.result import AsyncResult
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
 from app.core.celery_app import celery_app
 from app.tasks.video_stats_tasks import add, slow_task
 =======
 from core.celery_app import celery_app
+=======
+from app.core.celery_app import celery_app
+>>>>>>> 23287d9 (fix: correct import celery app)
 from tasks.video_stats_tasks import add, slow_task
 >>>>>>> ff4616c (fix: add missing import)
 =======
