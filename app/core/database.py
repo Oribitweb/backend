@@ -11,7 +11,14 @@ from app.core.config import settings
 
 SQLALCHEMY_DATABASE_URL = settings.SQLALCHEMY_DATABASE_URL
 
-engine = create_async_engine(SQLALCHEMY_DATABASE_URL)
+engine = create_async_engine(
+    SQLALCHEMY_DATABASE_URL,
+    pool_pre_ping=True,      # test connection before use, replace if dead
+    pool_recycle=300,        # recycle connections every 5 min (below the pooler's idle timeout)
+    pool_size=5,
+    max_overflow=10,
+    pool_timeout=30,
+)
 
 # Convert async URL to sync for Celery worker use
 SYNC_DATABASE_URL = SQLALCHEMY_DATABASE_URL.replace("postgresql+asyncpg", "postgresql+psycopg2")
