@@ -20,7 +20,7 @@ from app.ws.manager import manager
 import sentry_sdk
 
 from celery.result import AsyncResult
-from core.celery_app import celery_app
+from app.core.celery_app import celery_app
 from tasks.video_stats_tasks import add, slow_task
 
 sentry_sdk.init(
