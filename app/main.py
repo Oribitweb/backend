@@ -20,8 +20,13 @@ from app.ws.manager import manager
 import sentry_sdk
 
 from celery.result import AsyncResult
+<<<<<<< HEAD
 from app.core.celery_app import celery_app
 from app.tasks.video_stats_tasks import add, slow_task
+=======
+from core.celery_app import celery_app
+from tasks.video_stats_tasks import add, slow_task
+>>>>>>> ff4616c (fix: add missing import)
 
 sentry_sdk.init(
     dsn=settings.SENTRY_DSN,
