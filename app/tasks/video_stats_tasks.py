@@ -63,3 +63,16 @@ async def _flush_async() -> None:
         logger.error("flush_video_stats task failed", exc_info=True)
     finally:
         await redis.aclose()
+
+import time
+
+@celery_app.task
+def add(x: int, y: int) -> int:
+    """Simple synchronous task — great for verifying the worker works."""
+    return x + y
+
+@celery_app.task
+def slow_task(seconds: int = 5) -> dict:
+    """Long-running task to simulate real background work."""
+    time.sleep(seconds)
+    return {"status": "done", "slept_for": seconds}

@@ -19,6 +19,9 @@ from app.core.config import settings
 from app.ws.manager import manager
 import sentry_sdk
 
+from core.celery_app import celery_app
+from tasks.video_stats_tasks import add, slow_task
+
 sentry_sdk.init(
     dsn=settings.SENTRY_DSN,
     # Add data like request headers and IP for users,
@@ -65,6 +68,25 @@ async def readiness():
 # @app.get("/sentry-debug")
 # async def trigger_error():
 #     division_by_zero = 1 / 0
+
+@app.post("/add")
+def enqueue_add(x: int, y: int):
+    task = add.delay(x, y)
+    return {"task_id": task.id}
+
+@app.post("/slow")
+def enqueue_slow(seconds: int = 5):
+    task = slow_task.delay(seconds)
+    return {"task_id": task.id}
+
+@app.get("/tasks/{task_id}")
+def get_task_status(task_id: str):
+    result = AsyncResult(task_id, app=celery)
+    return {
+        "task_id": task_id,
+        "status": result.status,          # PENDING / STARTED / SUCCESS / FAILURE
+        "result": result.result if result.ready() else None,
+    }
 
 app.include_router(login_router)
 app.include_router(users_router)
