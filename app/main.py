@@ -23,6 +23,7 @@ from celery.result import AsyncResult
 <<<<<<< HEAD
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
 from app.core.celery_app import celery_app
 from app.tasks.video_stats_tasks import add, slow_task
 =======
@@ -36,6 +37,10 @@ from tasks.video_stats_tasks import add, slow_task
 from app.core.celery_app import celery_app
 from app.tasks.video_stats_tasks import add, slow_task
 >>>>>>> 5f9c6c6 (fix: correct import celery app)
+=======
+from app.core.celery_app import celery_app
+from app.tasks.video_stats_tasks import add, slow_task
+>>>>>>> e5af855 (fix: correct import)
 
 sentry_sdk.init(
     dsn=settings.SENTRY_DSN,
