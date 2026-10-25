@@ -21,11 +21,7 @@ import sentry_sdk
 
 from celery.result import AsyncResult
 from app.core.celery_app import celery_app
-<<<<<<< HEAD
 from app.tasks.video_stats_tasks import add, slow_task
-=======
-from tasks.video_stats_tasks import add, slow_task
->>>>>>> refs/remotes/origin/stage
 
 sentry_sdk.init(
     dsn=settings.SENTRY_DSN,
