@@ -1,12 +1,14 @@
 from datetime import datetime, timezone
 from typing import Optional, List, Tuple
 
+from fastapi import HTTPException
 from sqlalchemy import select, func, and_, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
 
 from app.models.video import Video, VideoStatus, VideoVisibility
 from app.models.video_public_id import VideoPublicId
+from app.models.category import Category
 from app.schemas.video import VideoUpdate
 
 
@@ -206,6 +208,19 @@ class CRUDVideo:
 
         # Get only the fields that were provided in the update
         update_data = video.model_dump(exclude_unset=True)
+
+        # Validate category_id up front — letting an unknown id reach the DB
+        # surfaces as an IntegrityError (500) instead of a useful 400.
+        if update_data.get("category_id") is not None:
+            category_id = update_data["category_id"]
+            result = await db.execute(
+                select(Category.id).where(Category.id == category_id)
+            )
+            if result.scalar_one_or_none() is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Category {category_id} does not exist.",
+                )
 
         # Apply updates to the model instance
         for key, value in update_data.items():
