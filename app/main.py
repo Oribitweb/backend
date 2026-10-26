@@ -20,8 +20,8 @@ from app.ws.manager import manager
 import sentry_sdk
 
 from celery.result import AsyncResult
-from core.celery_app import celery_app
-from tasks.video_stats_tasks import add, slow_task
+from app.core.celery_app import celery_app
+from app.tasks.video_stats_tasks import add, slow_task
 
 sentry_sdk.init(
     dsn=settings.SENTRY_DSN,
@@ -54,7 +54,11 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://oribitweb.github.io",  
+        "https://oribitweb.github.io",
+        "http://localhost:5500",
+        "http://127.0.0.1:5500",
+        "http://0.0.0.0:5500",
+        "http://[::1]:5500",
     ],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],  
