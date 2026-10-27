@@ -46,7 +46,7 @@ def publish_ws_event(public_id: str, payload: dict):
 
 
 
-@celery_app.task(bind=True, max_retries=2)
+@celery_app.task(bind=True, max_retries=2, soft_time_limit=1800, time_limit=1860)
 def transcode_video_task(self, video_id: int, original_key: str, bucket: str):
     """
     Celery task:

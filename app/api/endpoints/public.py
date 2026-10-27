@@ -140,6 +140,7 @@ async def get_video(
     return VideoDetailResponse(
         id=video.id,
         status=video.status,
+        visibility=video.visibility,
         title=video.title,
         description=video.description,
         channel_name=video.channel.name,

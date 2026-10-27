@@ -60,8 +60,9 @@ app.add_middleware(
         "http://0.0.0.0:5500",
         "http://[::1]:5500",
     ],
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]):\d+$",
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],  
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],  
     allow_headers=["*"],
 )
 
