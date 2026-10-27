@@ -117,7 +117,7 @@ async def login_user(
 
         # Update user last login
         # NOTE: remove the commit below if get_db / authenticate already commits
-        user.last_login = now
+        user.last_login = now.replace(tzinfo=None)
         await db.commit()
 
         # Tokens are only in HttpOnly cookies now, not in the body, so JS
