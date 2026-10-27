@@ -67,6 +67,7 @@ class VideoResponse(BaseModel):
     id: int
     public_id: Optional[str] = None
     status: str
+    visibility: str
     title: str
     description: Optional[str]
     channel_name: str

@@ -71,6 +71,7 @@ async def list_my_videos(
             id=v.id,
             public_id=v.public_id.public_id if v.public_id else None,
             status=v.status,
+            visibility=v.visibility,
             title=v.title,
             description=v.description,
             channel_name=v.channel.name if v.channel else "",
