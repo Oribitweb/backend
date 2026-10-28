@@ -60,7 +60,7 @@ class CRUDVideo:
         return result.first() is not None
 
     @staticmethod
-    def _public_feed_filter(category_id: Optional[int], is_short: Optional[bool]):
+    def _public_feed_filter(category_id: Optional[int], is_short: Optional[bool], channel_id: Optional[int] = None):
         """
         Shared WHERE clause for the public listing feed:
         - not soft-deleted
@@ -86,6 +86,8 @@ class CRUDVideo:
             conditions.append(Video.category_id == category_id)
         if is_short is not None:
             conditions.append(Video.is_short == is_short)
+        if channel_id is not None:
+            conditions.append(Video.channel_id == channel_id)
 
         return and_(*conditions)
 
@@ -158,6 +160,7 @@ class CRUDVideo:
         limit: int = 24,
         category_id: Optional[int] = None,
         is_short: Optional[bool] = None,
+        channel_id: Optional[int] = None,
     ) -> List[Video]:
         """Paginated feed of publicly visible, ready videos, newest first."""
         query = (
@@ -167,7 +170,7 @@ class CRUDVideo:
                 joinedload(Video.stats),
                 joinedload(Video.public_id),
             )
-            .where(self._public_feed_filter(category_id, is_short))
+            .where(self._public_feed_filter(category_id, is_short, channel_id))
             .order_by(Video.published_at.desc().nullslast(), Video.created_at.desc())
             .offset(skip)
             .limit(limit)
@@ -180,9 +183,10 @@ class CRUDVideo:
         db: AsyncSession,
         category_id: Optional[int] = None,
         is_short: Optional[bool] = None,
+        channel_id: Optional[int] = None,
     ) -> int:
         query = select(func.count(Video.id)).where(
-            self._public_feed_filter(category_id, is_short)
+            self._public_feed_filter(category_id, is_short, channel_id)
         )
         result = await db.execute(query)
         return result.scalar_one()
