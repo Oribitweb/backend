@@ -25,6 +25,7 @@ async def list_videos(
     page_size: int = Query(24, ge=1, le=50, description="Videos per page"),
     category_id: Optional[int] = Query(None, description="Filter by category"),
     is_short: Optional[bool] = Query(None, description="Filter shorts vs. regular videos"),
+    channel_id: Optional[int] = Query(None, description="Filter by channel"),
     db: AsyncSession = Depends(get_db),
     redis: Redis = Depends(get_redis),
 ):
@@ -46,9 +47,9 @@ async def list_videos(
     # (Concurrency across *different* requests is unaffected, since each
     # request gets its own session from get_db.)
     videos = await video_crud.get_public_feed(
-        db, skip=skip, limit=page_size, category_id=category_id, is_short=is_short
+        db, skip=skip, limit=page_size, category_id=category_id, is_short=is_short, channel_id=channel_id
     )
-    total = await video_crud.count_public_feed(db, category_id=category_id, is_short=is_short)
+    total = await video_crud.count_public_feed(db, category_id=category_id, is_short=is_short, channel_id=channel_id)
 
     if not videos:
         return VideoListResponse(items=[], total=total, page=page, page_size=page_size, has_next=False)
