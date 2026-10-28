@@ -1,8 +1,7 @@
- #!/bin/sh
-# Remove stale SQLite files left from a previous run
+#!/bin/sh
 rm -f /tmp/celerybeat-schedule*
 
-exec celery -A core.celery_app worker -B \
+exec celery -A app.core.celery_app worker -B \
   --concurrency=1 \
   --loglevel=info \
   --max-tasks-per-child=10 \
