@@ -34,19 +34,15 @@ def _make_session() -> async_sessionmaker:
 @celery_app.task(name="flush_video_stats")
 def flush_video_stats() -> None:
     """
-    Celery beat task — flushes all pending video stat deltas to Postgres.
+    Celery task — flushes all pending video stat deltas to Postgres.
 
     Drains likes, views, saves, comments, and shares in a single pass:
       1. Atomically claims stats:pending via RENAME.
       2. For each video: pipelines GETDEL across all five hot keys → one UPSERT.
       3. On DB failure: restores deltas to Redis and re-queues the video_id
-         so the next beat retries without losing data.
+         so the next task retries without losing data.
 
-    Beat schedule example (celery_app.py):
-        "flush-video-stats": {
-            "task": "flush_video_stats",
-            "schedule": 60.0,   # every 60 seconds
-        }
+    Triggered from API endpoints after stat mutations (likes, views).
     """
     asyncio.run(_flush_async())
 
@@ -66,6 +62,8 @@ async def _flush_async() -> None:
 
 import time
 
+
+# TEMPORARY test scaffold. TODO: remove after tests are stabilized.
 @celery_app.task
 def add(x: int, y: int) -> int:
     """Simple synchronous task — great for verifying the worker works."""

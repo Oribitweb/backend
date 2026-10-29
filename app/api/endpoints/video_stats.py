@@ -13,6 +13,7 @@ from app.services.auth_service import get_current_user_from_cookie
 from app.services.video_service import get_video_by_public_id
 from app.services.video_stats_counter import VideoStatsCounter
 from app.tasks.reactions_tasks import upsert_video_reaction, delsert_video_reaction
+from app.tasks.video_stats_tasks import flush_video_stats
 from app.api.deps import get_db
 from app.core.redis import get_redis
 
@@ -56,6 +57,9 @@ async def create_update_reaction(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Reaction service temporarily unavailable. Please retry.",
         ) from exc
+
+    # Queue a flush task to persist Redis deltas to Postgres
+    flush_video_stats.delay()
 
     try:
         upsert_video_reaction.delay(current_user.id, reaction_type, video.id)
@@ -120,6 +124,10 @@ async def delete_reaction(
             detail="Reaction service temporarily unavailable. Please retry.",
         ) from exc
 
+    # Queue a flush task to persist Redis deltas to Postgres (only for like removal)
+    if reaction_type == ReactionType.LIKE:
+        flush_video_stats.delay()
+
     try:
         delsert_video_reaction.delay(reaction_type, current_user.id, video.id)
     except Exception as exc:
@@ -171,5 +179,8 @@ async def view_video(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="View service temporarily unavailable. Please retry.",
         ) from exc
+
+    # Queue a flush task to persist Redis deltas to Postgres
+    flush_video_stats.delay()
 
     return {"message": "View submitted"}

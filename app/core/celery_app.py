@@ -23,10 +23,3 @@ celery_app.conf.update(
     task_time_limit=30 * 60,
     task_soft_time_limit=25 * 60,
 )
-
-celery_app.conf.beat_schedule = {
-    "flush_video_stats": {
-        "task": "flush_video_stats",
-        "schedule": 45.0,  # every 45s
-    },
-}

@@ -145,40 +145,6 @@ services:
       - ./app:/usr/src/app
     restart: unless-stopped
 
-  celery_beat:
-    build:
-      context: .
-      dockerfile: Dockerfile.dev
-    container_name: celery_beat
-    command: bash -c 'celery -A core.celery_app beat --loglevel=info'
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    environment:
-      - SECRET_KEY=K3IG57oVaoO/d0qzs/JZh1LmGHE4YYI0xPP1xm+oANc=
-      - SQLALCHEMY_DATABASE_URL=postgresql+asyncpg://postgres:postgres@db:5432/postgres
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
-      - ALGORITHM=HS256
-      - S3_ENDPOINT=http://minio:9000
-      - S3_PUBLIC_ENDPOINT=http://localhost:9000
-      - S3_ACCESS_KEY=minioadmin
-      - S3_SECRET_KEY=minioadmin123
-      - S3_BUCKET_NAME=video-bucket
-      - S3_REGION=us-east-1
-      - S3_USE_PATH_STYLE=true
-      - S3_USE_SSL=false
-      - SPRITE_INTERVAL=5
-      - SPRITE_TILE_WIDTH=160
-      - SPRITE_TILE_HEIGHT=90
-      - SPRITE_COLUMNS=10
-      - SPRITE_MAX_TILES=100
-    volumes:
-      - ./app:/usr/src/app
-    restart: unless-stopped
-
   locust:
     container_name: locust
     image: locustio/locust

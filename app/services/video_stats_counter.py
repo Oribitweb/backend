@@ -24,7 +24,7 @@ _HOT_TTL   = 60 * 60 * 24 * 7    # 7 days
 #   stats:dedup:{stat}:{video_id}:{user_id}   per-user presence key
 #   stats:pending                             set of video_ids needing a flush
 #
-# All four sub-counters write to the same stats:pending set so the Celery beat
+# All four sub-counters write to the same stats:pending set so the flush task
 # only has to drain one structure.
 
 PENDING_KEY = "stats:pending"
@@ -267,18 +267,17 @@ class VideoStatsCounter:
 
 
 
-    Celery beat
+    Flush task
     -----------
-        @app.task
-        async def flush_video_stats():
-            counter = VideoStatsCounter(redis, db)
-            await counter.flush_pending()
+        from app.tasks.video_stats_tasks import flush_video_stats
+
+        flush_video_stats.delay()  # queue a flush to persist Redis deltas to Postgres
 
     Flush design
     ------------
     flush_pending() atomically claims the entire stats:pending set via RENAME
     (any writes that arrive during the flush land in a fresh key and are picked
-    up next beat). For each video it then pipelines GETDEL across all three hot
+    up next task run). For each video it then pipelines GETDEL across all three hot
     keys and issues a single UPSERT to DB — one DB round-trip per video regardless
     of how many stats changed.
     """
@@ -295,10 +294,10 @@ class VideoStatsCounter:
 
     async def flush_pending(self) -> None:
         """
-        Celery beat entry point — drains all pending video deltas to Postgres.
+        Flush task entry point — drains all pending video deltas to Postgres.
 
         Uses RENAME to atomically claim the pending set before iterating,
-        so concurrent writes during the flush are queued for the next beat
+        so concurrent writes during the flush are queued for the next task run
         rather than silently dropped.
         """
         processing_key = "stats:processing"
@@ -319,7 +318,7 @@ class VideoStatsCounter:
         then issue a single UPSERT.
 
         GETDEL claims the delta atomically — any increments that arrive after
-        the pipeline executes land in a fresh key and are caught next beat.
+        the pipeline executes land in a fresh key and are caught next task run.
 
         UPSERT (INSERT ... ON CONFLICT DO UPDATE) is used instead of a bare
         UPDATE so that a video_stats row is created on first flush rather than
@@ -371,7 +370,7 @@ class VideoStatsCounter:
                 video_id,
                 exc_info=True,
             )
-            # Restore all non-zero deltas so the next beat picks them up
+            # Restore all non-zero deltas so the next task run picks them up
             async with self._redis.pipeline(transaction=True) as pipe:
                 for stat, delta in deltas.items():
                     if delta:
