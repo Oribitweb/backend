@@ -1,5 +1,7 @@
 #!/bin/sh
-rm -f /tmp/celerybeat-schedule*
+
+# Health server in the background so Render detects an open port
+python health.py &
 
 exec celery -A app.core.celery_app worker \
   --concurrency=1 \
