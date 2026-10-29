@@ -265,127 +265,117 @@ async def get_video_signed_manifest_url(
 
     return {"signed_url": signed_url}
 
+async def _reject(ws: WebSocket, code: int, message: str, msg_type: str = "auth_error", **extra):
+    """Send an error and close, tolerating a client that's already gone."""
+    try:
+        await ws.send_json({"type": msg_type, "message": message, **extra})
+        await ws.close(code=code)
+    except (WebSocketDisconnect, RuntimeError):
+        pass
+
+
 @router.websocket("/ws/video/{public_id}")
 async def websocket_video_status(
     websocket: WebSocket,
     public_id: str,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ):
-    """
-    Real‑time video processing status via WebSocket.
-    Authentication is handled in the first message, NOT during the handshake.
-    """
-    # 1. Accept immediately (no token in URL / cookies)
     await websocket.accept()
+    subscribed = False
 
-    # 2. Wait for auth message (5s timeout)
     try:
-        auth_message = await asyncio.wait_for(websocket.receive_json(), timeout=5.0)
-    except asyncio.TimeoutError:
-        await websocket.send_json({"type": "auth_error", "message": "Authentication timeout"})
-        await websocket.close(code=4001)
-        return
+        # --- 1. Auth message ---
+        try:
+            auth_message = await asyncio.wait_for(websocket.receive_json(), timeout=5.0)
+        except asyncio.TimeoutError:
+            return await _reject(websocket, 4001, "Authentication timeout")
+        except ValueError:  # invalid JSON
+            return await _reject(websocket, 4001, "Invalid auth message")
 
-    if auth_message.get("type") != "auth" or not auth_message.get("token"):
-        await websocket.send_json({"type": "auth_error", "message": "Invalid auth message"})
-        await websocket.close(code=4001)
-        return
+        if (
+            not isinstance(auth_message, dict)
+            or auth_message.get("type") != "auth"
+            or not auth_message.get("token")
+        ):
+            return await _reject(websocket, 4001, "Invalid auth message")
 
-    # 3. Verify JWT
-    token = auth_message["token"]
-    try:
-        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
-    except jwt.ExpiredSignatureError:
-        await websocket.send_json({"type": "auth_error", "message": "Token expired"})
-        await websocket.close(code=4001)
-        return
-    except jwt.InvalidTokenError:
-        await websocket.send_json({"type": "auth_error", "message": "Invalid token"})
-        await websocket.close(code=4001)
-        return
+        # --- 2. Verify JWT ---
+        try:
+            payload = jwt.decode(
+                auth_message["token"], settings.SECRET_KEY, algorithms=[settings.ALGORITHM]
+            )
+        except jwt.ExpiredSignatureError:
+            return await _reject(websocket, 4001, "Token expired")
+        except jwt.InvalidTokenError:
+            return await _reject(websocket, 4001, "Invalid token")
 
-    user_id = payload.get("sub") or payload.get("user_id")
-    if not user_id:
-        await websocket.send_json({"type": "auth_error", "message": "Token malformed"})
-        await websocket.close(code=4001)
-        return
+        try:
+            user_id = int(payload.get("sub") or payload.get("user_id"))
+        except (TypeError, ValueError):
+            return await _reject(websocket, 4001, "Token malformed")
 
-    # JWT claims (e.g. "sub") are always strings, but User.id is an integer
-    # column. Comparing them without casting sends the param as ::VARCHAR
-    # and Postgres has no integer = varchar operator, raising
-    # UndefinedFunctionError. Cast explicitly, and treat a non-numeric sub
-    # as a malformed/tampered token rather than letting the query 500.
-    try:
-        user_id = int(user_id)
-    except (TypeError, ValueError):
-        await websocket.send_json({"type": "auth_error", "message": "Token malformed"})
-        await websocket.close(code=4001)
-        return
+        # --- 3. DB lookups ---
+        user = (await db.execute(select(User).filter(User.id == user_id))).scalar_one_or_none()
+        if not user or not user.is_active:
+            return await _reject(websocket, 4001, "User not found")
 
-    result = await db.execute(select(User).filter(User.id == user_id))
-    user = result.scalar_one_or_none()
-    if not user or not user.is_active:
-        await websocket.send_json({"type": "auth_error", "message": "User not found"})
-        await websocket.close(code=4001)
-        return
+        try:
+            video = await get_video_by_public_id(db, public_id, user.id)
+        except HTTPException as e:
+            return await _reject(
+                websocket,
+                4004 if e.status_code == 404 else 4003,
+                e.detail,
+                msg_type="video.error",
+                videoId=public_id,
+                error=e.detail,
+            )
 
-    # 4. Authorisation: video must belong to the user
-    # FIX: Pass user.id (integer) instead of the user object
-    try:
-        video = await get_video_by_public_id(db, public_id, user.id)  # Changed from 'user' to 'user.id'
-    except HTTPException as e:
-        # Convert HTTP exception to WebSocket-friendly error
-        await websocket.send_json({
-            "type": "video.error",
-            "videoId": public_id,
-            "error": e.detail
-        })
-        await websocket.close(code=4004 if e.status_code == 404 else 4003)
-        return
+        channel = (
+            await db.execute(
+                select(Channel).filter(
+                    Channel.id == video.channel_id, Channel.user_id == user.id
+                )
+            )
+        ).scalar_one_or_none()
+        if not channel:
+            return await _reject(websocket, 4003, "Access denied")
 
-    result = await db.execute(
-        select(Channel).filter(
-            Channel.id == video.channel_id,
-            Channel.user_id == user.id
-        )
-    )
-    channel = result.scalar_one_or_none()
-    if not channel:
-        await websocket.send_json({"type": "auth_error", "message": "Access denied"})
-        await websocket.close(code=4003)
-        return
+        # Copy what we need, then free the DB connection before the long wait
+        video_status = video.status
+        processing_error = video.processing_error
+        await db.close()
 
-    # 5. Success
-    await websocket.send_json({"type": "auth_ok"})
+        # --- 4. Success ---
+        await websocket.send_json({"type": "auth_ok"})
 
-    # 6. Immediate response if already processed
-    if video.status == "ready":
-        await websocket.send_json({"type": "video.ready", "videoId": public_id})
-        await websocket.close()
-        return
-    if video.status == "failed":
-        await websocket.send_json({
-            "type": "video.error",
-            "videoId": public_id,
-            "error": video.processing_error or "Transcoding failed"
-        })
-        await websocket.close()
-        return
+        if video_status == "ready":
+            await websocket.send_json({"type": "video.ready", "videoId": public_id})
+            return
+        if video_status == "failed":
+            await websocket.send_json({
+                "type": "video.error",
+                "videoId": public_id,
+                "error": processing_error or "Transcoding failed",
+            })
+            return
 
-    # 7. Subscribe to Redis for updates
-    await manager.connect(public_id, websocket)
-    try:
+        # --- 5. Subscribe for updates ---
+        await manager.connect(public_id, websocket)
+        subscribed = True
         await manager.subscribe(public_id, websocket)
+
     except WebSocketDisconnect:
         logger.info(f"WebSocket disconnected for video {public_id}")
-    except Exception as e:
-        logger.error(f"WebSocket error for video {public_id}: {e}")
+    except Exception:
+        logger.exception(f"WebSocket error for video {public_id}")
         try:
             await websocket.send_json({"type": "error", "message": "Internal error"})
         except Exception:
             pass
     finally:
-        manager.disconnect(public_id, websocket)
+        if subscribed:
+            manager.disconnect(public_id, websocket)
         try:
             await websocket.close()
         except Exception:
