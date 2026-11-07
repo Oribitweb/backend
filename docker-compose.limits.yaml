@@ -1,0 +1,24 @@
+services:
+  backend:
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+        reservations:
+          cpus: "0.5"
+          memory: 512M
+    memswap_limit: 2G
+    command: bash -c 'fastapi run --host 0.0.0.0 --port 8000 --workers 2 main.py'
+
+  celery_worker:
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+        reservations:
+          cpus: "0.5"
+          memory: 512M
+    memswap_limit: 2G
+    command: bash -c 'celery -A core.celery_app worker --concurrency=2 --prefetch-multiplier=1 --loglevel=info'
