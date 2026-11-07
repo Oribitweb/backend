@@ -15,11 +15,7 @@ ENV PYTHONPATH=/usr/src
 
 # apt-get will try default mirrors first, then your custom mirror
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc \
-    libpq-dev \
     ffmpeg \
-    libjpeg-dev \
-    zlib1g-dev \
     && rm -rf /var/lib/apt/lists/*
 
 COPY ./requirements.txt .
