@@ -141,3 +141,7 @@ minio/*
 
 # Celery
 celerybeat-schedule*
+
+# Measurement data
+samples.csv
+.measure/
