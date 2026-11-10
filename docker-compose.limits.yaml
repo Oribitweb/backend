@@ -1,24 +1,41 @@
+# docker-compose.limits.yaml
 services:
   app:
-    # Reuse env vars / depends_on from the existing `backend` service
     extends:
       file: docker-compose.yaml
       service: backend
     container_name: app
-    profiles: ["prod-sim"]          # only starts when explicitly requested
+    profiles: ["prod-sim"]
     build:
       context: .
-      dockerfile: Dockerfile.stage        # <- the Dockerfile production uses (NOT Dockerfile.dev)
-    volumes: !reset []              # code is baked into the production image
-    command: bash start-all.sh      # adjust the path to match your image's WORKDIR
+      dockerfile: Dockerfile.stage
+    volumes: !reset []
+    command: bash start-all.sh
     environment:
-      - X264_PRESET=ultrafast
+      X264_PRESET: ultrafast
+    cpuset: "0-1"
+    memswap_limit: "${APP_MEM:-2G}"
     deploy:
       resources:
         limits:
-          cpus: "${APP_CPUS:-4}"    # generous by default so limits don't cap the measurement
-          memory: "${APP_MEM:-4G}"
+          cpus: "${APP_CPUS:-2}"
+          memory: "${APP_MEM:-2G}"
+          pids: 512
         reservations:
           cpus: "0.5"
           memory: 512M
-    memswap_limit: "${APP_MEM:-4G}" # same as memory = swap disabled
+
+  db:
+    cpuset: "2"
+    deploy:
+      resources:
+        limits: { cpus: "1", memory: 1G }
+
+  redis:
+    cpuset: "3"
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 256M }
+
+  locust:
+    cpuset: "4-5"
