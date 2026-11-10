@@ -1,6 +1,6 @@
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, HTTPException, Response, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from redis.asyncio import Redis
 
@@ -13,6 +13,7 @@ from app.services.video_stats_counter import VideoStatsCounter
 from app.crud.video import video as video_crud
 from app.crud.reaction import reaction as reaction_crud
 from app.core.redis import get_redis
+from app.services.storage import storage_service
 
 router = APIRouter(prefix="/videos")
 
@@ -26,6 +27,7 @@ async def list_videos(
     category_id: Optional[int] = Query(None, description="Filter by category"),
     is_short: Optional[bool] = Query(None, description="Filter shorts vs. regular videos"),
     channel_id: Optional[int] = Query(None, description="Filter by channel"),
+    request: Request = Depends(),
     db: AsyncSession = Depends(get_db),
     redis: Redis = Depends(get_redis),
 ):
@@ -77,8 +79,42 @@ async def list_videos(
             duration_seconds=v.duration_seconds,
             thumbnail_url=v.thumbnail_url,
             hls_manifest_url=v.hls_manifest_url,
-            sprite_url=v.sprite_url,
-            sprite_vtt_url=v.sprite_vtt_url,
+            # Transform sprite URLs to proxy URLs for existing videos
+            sprite_url=(f"/videos/hls/{v.public_id.public_id}/sprites/sprites.jpg" if v.public_id else v.sprite_url),
+            sprite_vtt_url=(f"/videos/hls/{v.public_id.public_id}/sprites/sprites.vtt" if v.public_id else v.sprite_vtt_url),
+            sprite_tile_width=v.sprite_tile_width,
+            sprite_tile_height=v.sprite_tile_height,
+            sprite_columns=v.sprite_columns,
+            sprite_rows=v.sprite_rows,
+            created_at=v.created_at,
+            channel_id=v.channel_id,
+            file_url=v.file_url,
+            like_count=like_count,
+            view_count=v.stats.views_count if v.stats else 0,
+            published_at=v.published_at,
+            updated_at=v.updated_at,
+        )
+        for v, like_count in zip(videos, like_counts)
+    ]
+
+    # Build absolute URLs for sprite transformation
+    api_base = str(request.base_url).rstrip("/") if request else ""
+
+    items = [
+        VideoResponse(
+            id=v.id,
+            public_id=v.public_id.public_id if v.public_id else None,
+            status=v.status,
+            visibility=v.visibility,
+            title=v.title,
+            description=v.description,
+            channel_name=v.channel.name if v.channel else "",
+            duration_seconds=v.duration_seconds,
+            thumbnail_url=v.thumbnail_url,
+            hls_manifest_url=v.hls_manifest_url,
+            # Transform sprite URLs to proxy URLs for existing videos
+            sprite_url=(f"{api_base}/videos/hls/{v.public_id.public_id}/sprites/sprites.jpg" if v.public_id and api_base else v.sprite_url),
+            sprite_vtt_url=(f"{api_base}/videos/hls/{v.public_id.public_id}/sprites/sprites.vtt" if v.public_id and api_base else v.sprite_vtt_url),
             sprite_tile_width=v.sprite_tile_width,
             sprite_tile_height=v.sprite_tile_height,
             sprite_columns=v.sprite_columns,
@@ -108,6 +144,7 @@ async def list_videos(
 @router.get("/{public_id}", response_model=VideoDetailResponse)
 async def get_video(
     public_id: str,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     redis: Redis = Depends(get_redis),
     current_user: Optional[User] = Depends(get_optional_current_user_from_cookie),
@@ -138,6 +175,17 @@ async def get_video(
     like_count = await VideoStatsCounter(redis=redis, db=db).likes.get(video.id)
 
     # Return all fields required by VideoDetailResponse
+    # Transform sprite URLs to proxy URLs (handles both old presigned and new proxy URLs)
+    # Build absolute URLs using request.base_url
+    api_base = str(request.base_url).rstrip("/")
+    public_id_str = video.public_id.public_id if video.public_id else None
+    if public_id_str:
+        sprite_url = f"{api_base}/videos/hls/{public_id_str}/sprites/sprites.jpg"
+        sprite_vtt_url = f"{api_base}/videos/hls/{public_id_str}/sprites/sprites.vtt"
+    else:
+        sprite_url = video.sprite_url
+        sprite_vtt_url = video.sprite_vtt_url
+
     return VideoDetailResponse(
         id=video.id,
         status=video.status,
@@ -148,8 +196,8 @@ async def get_video(
         duration_seconds=video.duration_seconds,
         thumbnail_url=video.thumbnail_url,
         hls_manifest_url=video.hls_manifest_url,
-        sprite_url=video.sprite_url,
-        sprite_vtt_url=video.sprite_vtt_url,
+        sprite_url=sprite_url,
+        sprite_vtt_url=sprite_vtt_url,
         sprite_tile_width=video.sprite_tile_width,
         sprite_tile_height=video.sprite_tile_height,
         sprite_columns=video.sprite_columns,
@@ -166,6 +214,71 @@ async def get_video(
         published_at=video.published_at,
         updated_at=video.updated_at,
     )
+
+
+@router.get("/hls/{public_id}/{path:path}")
+async def hls_proxy(
+    public_id: str,
+    path: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_optional_current_user_from_cookie),
+):
+    """
+    Proxy endpoint for HLS manifests, segments, and sprites.
+    Serves content from private S3 bucket. Generates fresh signed access on each request.
+    Path formats:
+      - HLS: master.m3u8, 360p/playlist.m3u8, 360p/segment_001.ts
+      - Sprites: sprites/sprites.jpg, sprites/sprites.vtt
+    """
+    # Verify video exists and is accessible
+    video = await get_video_by_public_id(db, public_id, current_user.id if current_user else None)
+    if not video:
+        raise HTTPException(status_code=404, detail="Video not found")
+
+    video_id = video.id
+
+    # Construct the full S3 key based on path prefix
+    if path.startswith("sprites/"):
+        s3_key = f"processed/{video_id}/{path}"  # processed/{video_id}/sprites/...
+    else:
+        s3_key = f"processed/{video_id}/hls/{path}"  # processed/{video_id}/hls/...
+
+    try:
+        # Get object from S3
+        response = storage_service.client.get_object(Bucket=storage_service.bucket_name, Key=s3_key)
+        content = response["Body"].read()
+        content_type = response.get("ContentType", "application/octet-stream")
+
+        # Determine proper content type based on file extension
+        if path.endswith(".ts"):
+            content_type = "video/mp2t"
+        elif path.endswith(".m3u8"):
+            content_type = "application/vnd.apple.mpegurl"
+        elif path.endswith(".vtt"):
+            content_type = "text/vtt"
+        elif path.endswith(".jpg") or path.endswith(".jpeg"):
+            content_type = "image/jpeg"
+        elif path.endswith(".png"):
+            content_type = "image/png"
+        elif path.endswith(".webp"):
+            content_type = "image/webp"
+
+        return Response(
+            content=content,
+            media_type=content_type,
+            headers={
+                "Cache-Control": "public, max-age=3600",
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
+                "Access-Control-Allow-Headers": "Range",
+                "Accept-Ranges": "bytes",
+            },
+        )
+
+    except storage_service.client.exceptions.NoSuchKey:
+        raise HTTPException(status_code=404, detail="File not found")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error serving content: {str(e)}")
 
 
 @router.put("/{public_id}")

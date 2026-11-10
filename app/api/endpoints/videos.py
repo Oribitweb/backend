@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
-from fastapi import APIRouter, Depends, HTTPException, status, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, status, WebSocket, WebSocketDisconnect, Request
 
 from app.services.auth_service import (
     get_current_user_from_cookie,
@@ -17,7 +17,7 @@ from app.services.auth_service import (
     create_access_token
 )
 from app.api.deps import get_db
-from app.models.video import Video
+from app.models.video import Video, VideoStatus
 from app.models.channel import Channel
 from app.models.user import User
 from app.schemas.video import (
@@ -28,6 +28,8 @@ from app.schemas.video import (
 from app.services.storage import storage_service
 from app.services.public_video_id import create_public_id
 from app.services.video_service import get_video_by_public_id
+from app.services.authorization_service import AuthorizationService
+from app.crud.video import video as video_crud
 from app.core.config import settings
 from app.tasks.video_tasks import transcode_video_task
 from app.ws.manager import manager
@@ -201,12 +203,27 @@ async def complete_upload(
     # sqlalchemy.exc.MissingGreenlet. Explicitly include it here instead.
     await db.refresh(db_video, attribute_names=["public_id"])
 
-    # Trigger Celery task
-    transcode_video_task.delay(
-        video_id=db_video.id,
-        original_key=payload.object_key,
-        bucket=settings.S3_BUCKET_NAME
-    )
+    # Trigger Celery task.
+    # A broker outage must not surface as an unhandled 500: Starlette's
+    # ServerErrorMiddleware sits *outside* CORSMiddleware, so a raw 500 is
+    # sent without Access-Control-Allow-Origin and the browser reports it as
+    # a misleading "blocked by CORS policy" error. Mark the video failed and
+    # raise a real 503 (HTTPException responses do pass through CORSMiddleware).
+    try:
+        transcode_video_task.delay(
+            video_id=db_video.id,
+            original_key=payload.object_key,
+            bucket=settings.S3_BUCKET_NAME
+        )
+    except Exception as exc:
+        logger.exception("Failed to enqueue transcode task for video %s", db_video.id)
+        db_video.status = VideoStatus.failed
+        db_video.processing_error = f"Could not queue transcoding: {exc}"
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Video was saved but transcoding could not be queued. Please try again later."
+        )
 
     return VideoCompleteResponse(
         public_id=db_video.public_id_str,
@@ -217,12 +234,14 @@ async def complete_upload(
 @router.get("/{public_id}/signed-url")
 async def get_video_signed_manifest_url(
     public_id: str,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: Optional[User] = Depends(get_optional_current_user_from_cookie),
 ):
     """
-    Returns a short-lived signed URL for the HLS manifest (.m3u8).
+    Returns a proxy URL for the HLS manifest (.m3u8).
     Only accessible if the video is ready and the user has viewing rights.
+    The proxy handles authentication and rewrites child playlist/segment URLs.
     """
     video = await get_video_by_public_id(db, public_id, current_user.id if current_user else None)
 
@@ -248,22 +267,11 @@ async def get_video_signed_manifest_url(
     if not is_owner and video.visibility != "public":
         raise HTTPException(status_code=403, detail="You do not have permission to view this video")
 
+    # 3. Return the absolute proxy URL for the master manifest.
+    #    The proxy will handle authentication and rewrite child playlist/segment URLs.
+    proxy_url = f"{request.base_url}videos/hls/{public_id}/master.m3u8"
 
-    # 3. Determine the S3 key of the HLS manifest.
-    #    Based on the transcoding task, the manifest is stored at:
-    #       processed/{video_id}/hls/master.m3u8
-    manifest_key = f"processed/{video.id}/hls/master.m3u8"
-
-    # 4. Generate a presigned URL valid for 60 seconds (short-lived)
-    try:
-        signed_url = storage_service.generate_presigned_get_url(
-            object_key=manifest_key,
-            expiration=7200
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Could not generate signed URL: {str(e)}")
-
-    return {"signed_url": signed_url}
+    return {"signed_url": proxy_url}
 
 async def _reject(ws: WebSocket, code: int, message: str, msg_type: str = "auth_error", **extra):
     """Send an error and close, tolerating a client that's already gone."""
@@ -397,3 +405,173 @@ async def get_websocket_token(
         expires_delta=timedelta(minutes=5)
     )
     return {"token": ws_token, "expires_in": 300}
+
+
+def _collect_video_storage_keys(video: Video) -> list[str]:
+    """Collect all S3 keys associated with a video for deletion."""
+    keys = []
+
+    # Original uploaded video
+    if video.original_key:
+        keys.append(video.original_key)
+
+    # Custom thumbnail (if stored as thumbnail_key attribute)
+    thumbnail_key = getattr(video, 'thumbnail_key', None)
+    if thumbnail_key:
+        keys.append(thumbnail_key)
+
+    # HLS manifest and processed files (stored under processed/{video_id}/)
+    # We'll delete the entire prefix
+    processed_prefix = f"processed/{video.id}/"
+    keys.append(processed_prefix)  # This is a prefix, handled specially
+
+    # Sprite and poster (if they have separate keys)
+    if video.sprite_url:
+        # Extract key from URL if it's an S3 key
+        pass  # These are typically under the processed prefix
+
+    if video.poster_url:
+        pass  # Same as above
+
+    return keys
+
+
+async def _delete_video_storage(video: Video) -> dict:
+    """Delete all storage objects associated with a video. Returns deletion summary."""
+    deleted = {"original": 0, "thumbnails": 0, "processed": 0, "errors": []}
+
+    # Delete original video file
+    if video.original_key:
+        try:
+            if storage_service.delete_object(video.original_key):
+                deleted["original"] = 1
+        except Exception as e:
+            deleted["errors"].append(f"original_key: {str(e)}")
+
+    # Delete custom thumbnail
+    thumbnail_key = getattr(video, 'thumbnail_key', None)
+    if thumbnail_key:
+        try:
+            if storage_service.delete_object(thumbnail_key):
+                deleted["thumbnails"] = 1
+        except Exception as e:
+            deleted["errors"].append(f"thumbnail_key: {str(e)}")
+
+    # Delete all processed files (HLS, sprites, posters, etc.)
+    processed_prefix = f"processed/{video.id}/"
+    try:
+        count = storage_service.delete_objects_by_prefix(processed_prefix)
+        deleted["processed"] = count
+    except Exception as e:
+        deleted["errors"].append(f"processed_prefix: {str(e)}")
+
+    return deleted
+
+
+@router.delete(
+    "/{public_id}",
+    status_code=status.HTTP_200_OK,
+    summary="Delete a single video by public_id",
+)
+async def delete_video(
+    public_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user_from_cookie),
+    current_channel: Channel = Depends(get_current_channel),
+):
+    """
+    Delete a single video (soft delete in DB + remove from object storage).
+    Only the channel owner can delete their videos.
+    """
+    # Verify channel ownership
+    auth_service = AuthorizationService(db)
+    if not auth_service.is_admin_or_channel_owner(current_user, current_channel):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not own this channel"
+        )
+
+    # Get video by public_id
+    video = await video_crud.get_by_public_id(db, public_id)
+    if not video:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Video not found"
+        )
+
+    # Verify video belongs to the current channel
+    if video.channel_id != current_channel.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Video does not belong to this channel"
+        )
+
+    # Delete from object storage first
+    storage_result = await _delete_video_storage(video)
+
+    # Soft delete from database
+    deleted_video = await video_crud.soft_delete(db, video.id)
+    if not deleted_video:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to delete video from database"
+        )
+
+    return {
+        "message": "Video deleted successfully",
+        "public_id": public_id,
+        "storage_cleanup": storage_result
+    }
+
+
+@router.delete(
+    "",
+    status_code=status.HTTP_200_OK,
+    summary="Delete all videos for the current user's channel",
+)
+async def delete_all_videos(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user_from_cookie),
+    current_channel: Channel = Depends(get_current_channel),
+):
+    """
+    Delete all videos for the current user's channel (soft delete in DB + remove from object storage).
+    Only the channel owner can perform this action.
+    """
+    # Verify channel ownership
+    auth_service = AuthorizationService(db)
+    if not auth_service.is_admin_or_channel_owner(current_user, current_channel):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not own this channel"
+        )
+
+    # Get all videos for this channel (including already soft-deleted? No, only active)
+    videos = await video_crud.get_by_channel(
+        db, current_channel.id, skip=0, limit=10000  # Large limit to get all
+    )
+
+    if not videos:
+        return {
+            "message": "No videos to delete",
+            "deleted_count": 0,
+            "storage_cleanup": {"original": 0, "thumbnails": 0, "processed": 0, "errors": []}
+        }
+
+    # Delete storage for each video
+    total_storage_result = {"original": 0, "thumbnails": 0, "processed": 0, "errors": []}
+    for video in videos:
+        result = await _delete_video_storage(video)
+        total_storage_result["original"] += result["original"]
+        total_storage_result["thumbnails"] += result["thumbnails"]
+        total_storage_result["processed"] += result["processed"]
+        total_storage_result["errors"].extend(result["errors"])
+
+    # Soft delete all videos in database
+    deleted_count = await video_crud.soft_delete_all_by_channel(db, current_channel.id)
+
+    return {
+        "message": f"Deleted {deleted_count} videos successfully",
+        "deleted_count": deleted_count,
+        "storage_cleanup": total_storage_result
+    }

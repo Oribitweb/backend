@@ -218,9 +218,17 @@ def transcode_video_task(self, video_id: int, original_key: str, bucket: str):
                                  step_percent=int(done / len(uploads) * 100))
 
             # Build public URLs
-            hls_manifest_url = storage_service.get_public_url(f"{hls_prefix}/master.m3u8")
-            sprite_url = storage_service.get_public_url(sprite_remote_key)
-            sprite_vtt_url = storage_service.get_public_url(vtt_remote_key)
+            # Use proxy URLs for HLS + sprites (permanent, generate fresh signatures on each request)
+            public_id_str = video.public_id_str
+            if public_id_str:
+                hls_manifest_url = f"/videos/hls/{public_id_str}/master.m3u8"
+                sprite_url = f"/videos/hls/{public_id_str}/sprites/sprites.jpg"
+                sprite_vtt_url = f"/videos/hls/{public_id_str}/sprites/sprites.vtt"
+            else:
+                # Fallback to presigned URL if no public_id yet (shouldn't happen for processed videos)
+                hls_manifest_url = storage_service.get_public_url(f"{hls_prefix}/master.m3u8")
+                sprite_url = storage_service.get_public_url(sprite_remote_key)
+                sprite_vtt_url = storage_service.get_public_url(vtt_remote_key)
 
             # Update database with all metadata
             video.hls_manifest_url = hls_manifest_url
