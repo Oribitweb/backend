@@ -40,3 +40,10 @@ celery_app.conf.update(
     # Celery >= 5.3: keep retrying broker connection on startup.
     broker_connection_retry_on_startup=True,
 )
+
+celery_app.conf.beat_schedule = {
+    "flush_video_stats": {
+        "task": "flush_video_stats",
+        "schedule": 45.0,  # every 45s
+    },
+}
