@@ -43,7 +43,16 @@ X264_PRESET = os.getenv("X264_PRESET", "veryfast")
 
 # Longest video we agree to transcode (seconds). Longer uploads are rejected before
 # any encoding starts, which bounds the CPU cost of a single job. Override via env.
-MAX_VIDEO_SECONDS = int(os.getenv("MAX_VIDEO_SECONDS", "120"))
+MAX_VIDEO_SECONDS = int(os.getenv("MAX_VIDEO_SECONDS", "60"))
+
+# Maximum uploaded file size (MB). Files larger than this are rejected after download
+# but before ffmpeg runs, preventing OOM on huge inputs. Override via env.
+MAX_VIDEO_SIZE_MB = int(os.getenv("MAX_VIDEO_SIZE_MB", "100"))
+
+# Sprite generation limits (reduce memory during Pillow sprite sheet assembly).
+# Override via env.
+SPRITE_MAX_TILES = int(os.getenv("SPRITE_MAX_TILES", "50"))
+SPRITE_COLUMNS = int(os.getenv("SPRITE_COLUMNS", "5"))
 
 
 class VideoRejected(Exception):
@@ -117,6 +126,13 @@ def transcode_video_task(self, video_id: int, original_key: str, bucket: str):
             logger.info(f"Downloading {original_key} from bucket {bucket}")
             publish_progress("download", "Downloading original video", step_index=1)
             storage_service.download_file(original_key, input_path)
+
+            # Guard: reject files exceeding size limit BEFORE ffmpeg runs (prevents OOM)
+            file_size_mb = os.path.getsize(input_path) / (1024 * 1024)
+            if file_size_mb > MAX_VIDEO_SIZE_MB:
+                raise VideoRejected(
+                    f"File is too large ({file_size_mb:.0f} MB). Maximum allowed is {MAX_VIDEO_SIZE_MB} MB."
+                )
 
             # Probe duration / resolution
             publish_progress("analyze", "Analyzing video", step_index=2)
@@ -381,6 +397,7 @@ def transcode_to_hls_multi_quality(input_path: str, output_dir: str, duration: f
         playlist_path = os.path.join(variant_dir, "playlist.m3u8")
         cmd = [
             "ffmpeg", "-nostats", "-loglevel", "error", "-progress", "pipe:1",
+            "-threads", "1",  # Limit to 1 thread to bound CPU/memory on small pods
             "-i", input_path,
             "-c:v", "libx264", "-b:v", r["bitrate"],
             "-vf", f"scale={r['scale']}", "-preset", X264_PRESET,
@@ -456,8 +473,8 @@ def generate_video_sprites(input_path: str, output_dir: str, video_duration: flo
     sprite_interval = settings.SPRITE_INTERVAL     # seconds between thumbnails
     tile_width = settings.SPRITE_TILE_WIDTH        # width of each thumbnail
     tile_height = settings.SPRITE_TILE_HEIGHT      # height of each thumbnail (16:9)
-    columns = settings.SPRITE_COLUMNS              # number of tiles per row
-    max_tiles = settings.SPRITE_MAX_TILES          # maximum sprites to generate (avoid huge files)
+    columns = SPRITE_COLUMNS                       # number of tiles per row (reduced for memory)
+    max_tiles = SPRITE_MAX_TILES                   # maximum sprites to generate (reduced for memory)
     
     # Calculate number of thumbnails needed
     num_thumbnails = min(math.ceil(video_duration / sprite_interval), max_tiles)

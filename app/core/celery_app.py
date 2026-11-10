@@ -21,22 +21,22 @@ celery_app.conf.update(
     enable_utc=True,
     task_track_started=True,
 
-    # Hard cap on a single job. Set to ~3-4x the expected worst-case job time on the
-    # target server (and cap upload length accordingly). Applies to every task that
-    # does not set its own limits.
-    task_soft_time_limit=15 * 60,
-    task_time_limit=16 * 60,
+    # Hard cap on a single job. Portfolio: videos capped at 60s, so 8 min is plenty.
+    task_soft_time_limit=8 * 60,
+    task_time_limit=9 * 60,
 
-    # Reserve only one message per worker process. With long ffmpeg jobs the default
-    # (4x concurrency) makes the worker hoard queued tasks while one job runs.
+    # Single worker process, no prefetch, recycle to reclaim memory fragmentation.
+    worker_concurrency=1,
     worker_prefetch_multiplier=1,
+    worker_max_tasks_per_child=5,
 
-    # Results are kept in Redis; expire them after 1h instead of the 1-day default
-    # to keep Redis memory small. (If results are never read via AsyncResult, use
-    # task_ignore_result=True instead and drop task_track_started.)
+    # Re-queue if worker dies mid-task (OOM, crash, restart).
+    task_acks_late=True,
+    task_reject_on_worker_lost=True,
+
+    # Results expire after 1h to keep Redis memory small.
     result_expires=60 * 60,
 
-    # Celery >= 5.3: keep retrying the broker connection on startup (silences the
-    # deprecation warning and survives Redis starting after the worker).
+    # Celery >= 5.3: keep retrying broker connection on startup.
     broker_connection_retry_on_startup=True,
 )
