@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from typing import Optional, List, Tuple
 
 from fastapi import HTTPException
-from sqlalchemy import select, func, and_, or_
+from sqlalchemy import select, func, and_, or_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
 
@@ -238,5 +238,42 @@ class CRUDVideo:
         await db.refresh(db_video)
 
         return db_video
+
+    async def soft_delete(self, db: AsyncSession, video_id: int) -> Optional[Video]:
+        """Soft delete a video by setting deleted_at timestamp."""
+        result = await db.execute(
+            select(Video).where(Video.id == video_id, Video.deleted_at.is_(None))
+        )
+        db_video = result.scalar_one_or_none()
+        if not db_video:
+            return None
+
+        db_video.deleted_at = datetime.now(timezone.utc)
+        await db.commit()
+        await db.refresh(db_video)
+        return db_video
+
+    async def soft_delete_by_public_id(
+        self, db: AsyncSession, public_id: str
+    ) -> Optional[Video]:
+        """Soft delete a video by public_id."""
+        video = await self.get_by_public_id(db, public_id)
+        if not video:
+            return None
+        return await self.soft_delete(db, video.id)
+
+    async def soft_delete_all_by_channel(
+        self, db: AsyncSession, channel_id: int
+    ) -> int:
+        """Soft delete all videos for a channel. Returns count of deleted videos."""
+        now = datetime.now(timezone.utc)
+        result = await db.execute(
+            update(Video)
+            .where(Video.channel_id == channel_id, Video.deleted_at.is_(None))
+            .values(deleted_at=now)
+        )
+        await db.commit()
+        return result.rowcount
+
 
 video = CRUDVideo(Video)

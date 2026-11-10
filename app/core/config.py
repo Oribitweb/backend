@@ -13,12 +13,12 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
 
     # S3/MinIO
-    S3_ENDPOINT: str = "http://minio:9000"
-    S3_PUBLIC_ENDPOINT: str = "http://localhost:9000"
-    S3_ACCESS_KEY: str = "minioadmin"
-    S3_SECRET_KEY: str = "minioadmin123"
-    S3_BUCKET_NAME: str = "video-bucket"
-    S3_REGION: str = "us-east-1"
+    S3_ENDPOINT: str = "https://s3.filebase.io"
+    #S3_PUBLIC_ENDPOINT: str = "http://localhost:9000"
+    S3_ACCESS_KEY: str = "AAD4B60574E7F9BC3147"
+    S3_SECRET_KEY: str = "zs6HB3TcS8axWI431KUatC2QhiwL4nVrMleUGfOl"
+    S3_BUCKET_NAME: str = "orbit-bucket"
+    S3_REGION: str = "auto"
     S3_USE_PATH_STYLE: bool = True
     S3_USE_SSL: bool = False
 

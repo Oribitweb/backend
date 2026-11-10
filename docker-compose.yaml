@@ -1,3 +1,28 @@
+x-s3-env: &s3-env
+  S3_ENDPOINT: https://s3.filebase.io
+  S3_PUBLIC_ENDPOINT: https://s3.filebase.io
+  S3_ACCESS_KEY: ${FILEBASE_ACCESS_KEY}
+  S3_SECRET_KEY: ${FILEBASE_SECRET_KEY}
+  S3_BUCKET_NAME: ${FILEBASE_BUCKET}
+  S3_REGION: us-east-1
+  S3_USE_PATH_STYLE: "true"
+  S3_USE_SSL: "true"
+
+x-app-env: &app-env
+  <<: *s3-env
+  SECRET_KEY: ${SECRET_KEY}
+  SQLALCHEMY_DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/postgres
+  # If your app reads DATABASE_URL instead, set it too:
+  # DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/postgres
+  CELERY_BROKER_URL: redis://redis:6379/0
+  CELERY_RESULT_BACKEND: redis://redis:6379/0
+  ALGORITHM: HS256
+  SPRITE_INTERVAL: "5"
+  SPRITE_TILE_WIDTH: "160"
+  SPRITE_TILE_HEIGHT: "90"
+  SPRITE_COLUMNS: "10"
+  SPRITE_MAX_TILES: "100"
+
 services:
   db:
     image: postgres:15-alpine
@@ -7,7 +32,6 @@ services:
       - POSTGRES_PASSWORD=postgres
       - POSTGRES_DB=postgres
     volumes:
-      # FIX: correct PGDATA path (was /var/lib/postgres/data)
       # NOTE: on the host, ensure ./postgres/data is writable by uid 70 (postgres in alpine),
       # e.g. `sudo chown -R 70:70 ./postgres/data`, otherwise initdb fails and the
       # container exits -> the `db` DNS name disappears.
@@ -21,41 +45,6 @@ services:
     ports:
       - "5432:5432"
     restart: unless-stopped
-
-  minio:
-    image: minio/minio:latest
-    container_name: minio
-    environment:
-      - MINIO_ROOT_USER=minioadmin
-      - MINIO_ROOT_PASSWORD=minioadmin123
-    command: server /data --console-address ":9001"
-    ports:
-      - "9000:9000"
-      - "9001:9001"
-    volumes:
-      - ./minio/data:/data
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-    restart: unless-stopped
-
-  create-bucket:
-    image: minio/mc:latest
-    container_name: create-bucket
-    depends_on:
-      minio:
-        condition: service_healthy
-    entrypoint: >
-      /bin/sh -c "
-      mc alias set local http://minio:9000 minioadmin minioadmin123;
-      mc mb local/video-bucket --ignore-existing;
-      mc anonymous set download local/video-bucket;
-      echo '✅ Bucket created successfully';
-      exit 0;
-      "
 
   redis:
     image: redis:7-alpine
@@ -77,31 +66,10 @@ services:
     depends_on:
       db:
         condition: service_healthy
-      minio:
-        condition: service_healthy
       redis:
         condition: service_healthy
     environment:
-      - SECRET_KEY=K3IG57oVaoO/d0qzs/JZh1LmGHE4YYI0xPP1xm+oANc=
-      - SQLALCHEMY_DATABASE_URL=postgresql+asyncpg://postgres:postgres@db:5432/postgres
-      # If your app reads DATABASE_URL instead, set it too:
-      # - DATABASE_URL=postgresql+asyncpg://postgres:postgres@db:5432/postgres
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
-      - ALGORITHM=HS256
-      - S3_ENDPOINT=http://minio:9000
-      - S3_PUBLIC_ENDPOINT=http://localhost:9000
-      - S3_ACCESS_KEY=minioadmin
-      - S3_SECRET_KEY=minioadmin123
-      - S3_BUCKET_NAME=video-bucket
-      - S3_REGION=us-east-1
-      - S3_USE_PATH_STYLE=true
-      - S3_USE_SSL=false
-      - SPRITE_INTERVAL=5
-      - SPRITE_TILE_WIDTH=160
-      - SPRITE_TILE_HEIGHT=90
-      - SPRITE_COLUMNS=10
-      - SPRITE_MAX_TILES=100
+      <<: *app-env
     ports:
       - "8000:8000"
     command: bash -c 'fastapi dev --host 0.0.0.0 --port 8000 main.py'
@@ -118,29 +86,10 @@ services:
     depends_on:
       db:
         condition: service_healthy
-      minio:
-        condition: service_healthy
       redis:
         condition: service_healthy
     environment:
-      - SECRET_KEY=K3IG57oVaoO/d0qzs/JZh1LmGHE4YYI0xPP1xm+oANc=
-      - SQLALCHEMY_DATABASE_URL=postgresql+asyncpg://postgres:postgres@db:5432/postgres
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
-      - ALGORITHM=HS256
-      - S3_ENDPOINT=http://minio:9000
-      - S3_PUBLIC_ENDPOINT=http://localhost:9000
-      - S3_ACCESS_KEY=minioadmin
-      - S3_SECRET_KEY=minioadmin123
-      - S3_BUCKET_NAME=video-bucket
-      - S3_REGION=us-east-1
-      - S3_USE_PATH_STYLE=true
-      - S3_USE_SSL=false
-      - SPRITE_INTERVAL=5
-      - SPRITE_TILE_WIDTH=160
-      - SPRITE_TILE_HEIGHT=90
-      - SPRITE_COLUMNS=10
-      - SPRITE_MAX_TILES=100
+      <<: *app-env
     volumes:
       - ./app:/usr/src/app
     restart: unless-stopped
