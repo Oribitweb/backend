@@ -22,12 +22,12 @@ def get_video_service(db: AsyncSession = Depends(get_db)) -> VideoService:
 
 @router.get("", response_model=VideoListResponse)
 async def list_videos(
+    request: Request,
     page: int = Query(1, ge=1, description="1-indexed page number"),
     page_size: int = Query(24, ge=1, le=50, description="Videos per page"),
     category_id: Optional[int] = Query(None, description="Filter by category"),
     is_short: Optional[bool] = Query(None, description="Filter shorts vs. regular videos"),
     channel_id: Optional[int] = Query(None, description="Filter by channel"),
-    request: Request = Depends(),
     db: AsyncSession = Depends(get_db),
     redis: Redis = Depends(get_redis),
 ):
