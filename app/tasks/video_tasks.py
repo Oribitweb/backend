@@ -11,6 +11,7 @@ import logging
 import redis
 
 from celery import shared_task
+from celery.exceptions import SoftTimeLimitExceeded
 from sqlalchemy.orm import Session
 
 from app.core.database import SyncSessionLocal
@@ -31,8 +32,22 @@ logger = logging.getLogger(__name__)
 HLS_RENDITIONS = [
     {"bitrate": "800k", "scale": "640:360", "name": "360p"},
     {"bitrate": "2500k", "scale": "1280:720", "name": "720p"},
-    {"bitrate": "5000k", "scale": "1920:1080", "name": "1080p"},
+    # 1080p disabled to save ~60% of encoding CPU. Re-enable by uncommenting:
+    # {"bitrate": "5000k", "scale": "1920:1080", "name": "1080p"},
 ]
+
+
+# x264 speed/size trade-off. "veryfast" is roughly 2x cheaper than "medium" in CPU
+# time at a modestly larger file for the same bitrate target. Override via env.
+X264_PRESET = os.getenv("X264_PRESET", "veryfast")
+
+# Longest video we agree to transcode (seconds). Longer uploads are rejected before
+# any encoding starts, which bounds the CPU cost of a single job. Override via env.
+MAX_VIDEO_SECONDS = int(os.getenv("MAX_VIDEO_SECONDS", "120"))
+
+
+class VideoRejected(Exception):
+    """Upload refused by policy (e.g. too long). Deterministic, so never retried."""
 
 
 def publish_ws_event(public_id: str, payload: dict):
@@ -46,7 +61,7 @@ def publish_ws_event(public_id: str, payload: dict):
 
 
 
-@celery_app.task(bind=True, max_retries=2, soft_time_limit=1800, time_limit=1860)
+@celery_app.task(bind=True, max_retries=2)  # time limits: see celery_app.conf
 def transcode_video_task(self, video_id: int, original_key: str, bucket: str):
     """
     Celery task:
@@ -108,6 +123,10 @@ def transcode_video_task(self, video_id: int, original_key: str, bucket: str):
             video_info = get_video_stream_info(input_path)
             duration = video_info["duration"]
             orig_height = video_info["height"]
+            if duration > MAX_VIDEO_SECONDS:
+                raise VideoRejected(
+                    f"Video is too long ({int(duration)}s). Maximum allowed is {MAX_VIDEO_SECONDS}s."
+                )
             video.duration_seconds = int(duration)
             db.commit()
 
@@ -152,7 +171,10 @@ def transcode_video_task(self, video_id: int, original_key: str, bucket: str):
                              step_index=step_index("sprites"))
             sprite_output_dir = os.path.join(tmpdir, "sprites")
             os.makedirs(sprite_output_dir, exist_ok=True)
-            sprite_data = generate_video_sprites(input_path, sprite_output_dir, duration)
+            # Use the lowest rendition (already encoded above) as the source: decoding
+            # 360p is far cheaper than decoding the original, and 160x90 tiles lose nothing.
+            sprite_source = os.path.join(output_hls_dir, renditions[0]["name"], "playlist.m3u8")
+            sprite_data = generate_video_sprites(sprite_source, sprite_output_dir, duration)
 
             # Generate or use user-uploaded thumbnail
             if not video.thumbnail_url:
@@ -160,7 +182,7 @@ def transcode_video_task(self, video_id: int, original_key: str, bucket: str):
                                  step_index=step_index("thumbnail"))
                 # Generate poster from first frame
                 poster_path = os.path.join(tmpdir, "poster.jpg")
-                generate_thumbnail(input_path, poster_path, time_seconds=5)
+                generate_thumbnail(input_path, poster_path, time_seconds=min(5, duration / 2))
                 poster_key = f"processed/{video_id}/poster.jpg"
                 storage_service.upload_file(poster_path, poster_key, content_type="image/jpeg")
                 video.thumbnail_url = storage_service.get_public_url(poster_key)
@@ -238,9 +260,13 @@ def transcode_video_task(self, video_id: int, original_key: str, bucket: str):
             # Tell any connected client what happened: a retry is coming, or this
             # was the final attempt (self.retry raises MaxRetriesExceeded once the
             # budget is spent, so we must decide which event to send *before* it).
+            # ffmpeg failures (corrupt/unsupported input) and time-limit hits are
+            # deterministic: retrying just repeats the whole encode at full CPU cost.
+            # Only transient errors (storage, network, DB) are worth a retry.
+            retryable = not isinstance(e, (subprocess.CalledProcessError, SoftTimeLimitExceeded, VideoRejected))
             if pub_id:
                 retries_done = self.request.retries
-                if retries_done < (self.max_retries or 0):
+                if retryable and retries_done < (self.max_retries or 0):
                     publish_ws_event(pub_id, {
                         "type": "video.progress",
                         "videoId": pub_id,
@@ -254,6 +280,8 @@ def transcode_video_task(self, video_id: int, original_key: str, bucket: str):
                         "videoId": pub_id,
                         "error": str(e)
                     })
+            if not retryable:
+                return
             raise self.retry(exc=e, countdown=60)
     finally:
         db.close()
@@ -321,6 +349,9 @@ def run_ffmpeg_with_progress(cmd: list, duration_seconds: float, on_percent) -> 
                     on_percent(percent)
         returncode = proc.wait()
     finally:
+        if proc.poll() is None:
+            proc.kill()  # e.g. SoftTimeLimitExceeded: don't leave ffmpeg burning CPU in the background
+            proc.wait()
         stderr_thread.join(timeout=5)
 
     if returncode != 0:
@@ -344,7 +375,7 @@ def transcode_to_hls_multi_quality(input_path: str, output_dir: str, duration: f
             "ffmpeg", "-nostats", "-loglevel", "error", "-progress", "pipe:1",
             "-i", input_path,
             "-c:v", "libx264", "-b:v", r["bitrate"],
-            "-vf", f"scale={r['scale']}", "-preset", "medium",
+            "-vf", f"scale={r['scale']}", "-preset", X264_PRESET,
             "-c:a", "aac", "-b:a", "128k",
             "-hls_time", "6",
             "-hls_playlist_type", "vod",
@@ -378,7 +409,7 @@ def transcode_to_hls_multi_quality(input_path: str, output_dir: str, duration: f
 
 def generate_thumbnail(input_path: str, output_path: str, time_seconds: int = 5):
     subprocess.run(
-        ["ffmpeg", "-i", input_path, "-ss", str(time_seconds),
+        ["ffmpeg", "-ss", str(time_seconds), "-i", input_path,  # -ss before -i = fast seek
          "-vframes", "1", "-q:v", "2", output_path],
         check=True, capture_output=True
     )
