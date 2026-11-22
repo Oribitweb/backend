@@ -11,7 +11,7 @@ from fastapi import (
     status,
 )
 
-from app.models.user import User
+from app.models.user import User, UserRole
 from app.api.deps import get_db, check_admin_or_author
 from app.services.auth_service import (
     get_current_user_from_cookie,
@@ -119,8 +119,9 @@ async def retrieve_user(
             status_code=404,
             detail="User not found"
         )
-    if check_admin_or_author(user_id, current_user):
-        return db_user
+
+    check_admin_or_author(user_id, current_user)
+    return db_user
 
 @router.put("/{user_id}", response_model=UserPublic)
 async def update_user(
@@ -144,13 +145,15 @@ async def update_user(
     else:
         request_json = request.model_dump(exclude_unset=True)
 
+    original_email = db_user.email
+
     # Apply updates and validate
     for key, value in request_json.items():
         if value is not None:
             setattr(db_user, key, value)
 
     # Email uniqueness check
-    if "email" in request_json and request_json["email"] != db_user.email:
+    if "email" in request_json and request_json["email"] != original_email:
         email_existing = await get_user_by_email(db, request_json["email"])
         if email_existing and email_existing.id != user_id:
             raise HTTPException(status_code=409, detail="Email already exists")
@@ -171,10 +174,10 @@ async def delete_user(
     if not db_user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    if check_admin_or_author(user_id, current_user):
-        await delete_user_from_db(db, db_user)
+    check_admin_or_author(user_id, current_user)
+    await delete_user_from_db(db, db_user)
 
-        raise HTTPException(status_code=status.HTTP_204_NO_CONTENT)
+    raise HTTPException(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post(
@@ -189,6 +192,9 @@ async def create_new_admin(
     db: AsyncSession = Depends(get_db)
 ):
     """Create a new admin user (only existing admins)"""
+
+    if admin.role != UserRole.ADMIN:
+        raise HTTPException(status_code=403, detail="Admin privileges required")
 
     # Check if user already exists
     result = await db.execute(
