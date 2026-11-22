@@ -13,6 +13,16 @@ services:
     command: bash start-all.sh
     environment:
       X264_PRESET: ultrafast
+      # Use MinIO for prod-sim; override Filebase defaults from x-app-env
+      S3_ENDPOINT: http://minio:9000
+      S3_PUBLIC_ENDPOINT: http://localhost:9000
+      S3_ACCESS_KEY: minioadmin
+      S3_SECRET_KEY: minioadmin123
+      S3_BUCKET_NAME: video-bucket
+      S3_REGION: us-east-1
+      S3_USE_PATH_STYLE: "true"
+      S3_USE_SSL: "false"
+      CELERY_EMBED_BEAT: "0"
     cpuset: "0-1"
     memswap_limit: "${APP_MEM:-2G}"
     deploy:
@@ -25,6 +35,26 @@ services:
           cpus: "0.5"
           memory: 512M
 
+  celery_beat:
+    extends:
+      file: docker-compose.yaml
+      service: celery_beat
+    profiles: ["prod-sim"]
+    # Use MinIO for prod-sim; override Filebase defaults from x-app-env
+    environment:
+      S3_ENDPOINT: http://minio:9000
+      S3_PUBLIC_ENDPOINT: http://localhost:9000
+      S3_ACCESS_KEY: minioadmin
+      S3_SECRET_KEY: minioadmin123
+      S3_BUCKET_NAME: video-bucket
+      S3_REGION: us-east-1
+      S3_USE_PATH_STYLE: "true"
+      S3_USE_SSL: "false"
+    cpuset: "4"
+    deploy:
+      resources:
+        limits: { cpus: "0.25", memory: 128M }
+
   db:
     cpuset: "2"
     deploy:
@@ -36,6 +66,22 @@ services:
     deploy:
       resources:
         limits: { cpus: "0.5", memory: 256M }
+
+  minio:
+    extends:
+      file: docker-compose.yaml
+      service: minio
+    profiles: ["prod-sim"]
+    cpuset: "6"
+    deploy:
+      resources:
+        limits: { cpus: "1", memory: 1G }
+
+  create-bucket:
+    extends:
+      file: docker-compose.yaml
+      service: create-bucket
+    profiles: ["prod-sim"]
 
   locust:
     cpuset: "4-5"

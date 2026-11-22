@@ -19,7 +19,7 @@ x-minio-env: &minio-env
   S3_USE_SSL: "false"
 
 x-app-env: &app-env
-  <<: *minio-env    # Change to *s3-env if you want to use Filebase S3 instead of MinIO
+  <<: *s3-env    # Default to Filebase S3; MinIO only under prod-sim profile
   SECRET_KEY: ${SECRET_KEY}
   SQLALCHEMY_DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/postgres
   # If your app reads DATABASE_URL instead, set it too:
