@@ -28,7 +28,7 @@ celery_app.conf.update(
     # Single worker process, no prefetch, recycle to reclaim memory fragmentation.
     worker_concurrency=1,
     worker_prefetch_multiplier=1,
-    worker_max_tasks_per_child=5,
+    worker_max_tasks_per_child=10,  # effective value tested in start-all.sh
 
     # Re-queue if worker dies mid-task (OOM, crash, restart).
     task_acks_late=True,

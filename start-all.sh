@@ -14,15 +14,27 @@ fi
 set -o pipefail
 
 # ---------------------------------------------------------------------------
-# Start Celery worker in the background
+# Celery Beat embedding: run beat inside the worker when CELERY_EMBED_BEAT!=0
 # ---------------------------------------------------------------------------
+# Default to embedding beat (single-container deployments).
+# Set CELERY_EMBED_BEAT=0 to run beat as a separate process (prod-sim).
+if [ -z "$CELERY_EMBED_BEAT" ] || [ "$CELERY_EMBED_BEAT" != "0" ]; then
+  EMBED_BEAT_ARGS="-B -s /tmp/celerybeat-schedule"
+else
+  EMBED_BEAT_ARGS=""
+fi
+
+# ---------------------------------------------------------------------------
+# Start Celery worker in the background (with optional embedded beat)
+# ---------------------------------------------------------------------------
+# worker_max_tasks_per_child is set in celery_app.py (10)
 celery -A app.core.celery_app worker \
   --concurrency=1 \
   --loglevel=info \
-  --max-tasks-per-child=10 \
+  $EMBED_BEAT_ARGS \
   -Q celery &
 CELERY_PID=$!
-echo "Celery worker started with PID $CELERY_PID"
+echo "Celery worker started with PID $CELERY_PID (embed_beat=$EMBED_BEAT_ARGS)"
 
 # ---------------------------------------------------------------------------
 # Start the API in the background (Render provides $PORT)
