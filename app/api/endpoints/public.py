@@ -243,13 +243,20 @@ async def hls_proxy(
     else:
         s3_key = f"processed/{video_id}/hls/{path}"  # processed/{video_id}/hls/...
 
-    try:
-        # Get object from S3
+    # Determine visibility for Cache-Control
+    is_public = video.visibility == "public"
+
+    # Offload blocking S3 get_object and body read to a worker thread
+    def _fetch_object():
         response = storage_service.client.get_object(Bucket=storage_service.bucket_name, Key=s3_key)
         content = response["Body"].read()
         content_type = response.get("ContentType", "application/octet-stream")
+        return content, content_type
 
-        # Determine proper content type based on file extension
+    try:
+        content, content_type = await run_in_threadpool(_fetch_object)
+
+        # Override content type based on file extension
         if path.endswith(".ts"):
             content_type = "video/mp2t"
         elif path.endswith(".m3u8"):
@@ -263,11 +270,12 @@ async def hls_proxy(
         elif path.endswith(".webp"):
             content_type = "image/webp"
 
+        cache_control = "public, max-age=3600" if is_public else "private, max-age=3600"
         return Response(
             content=content,
             media_type=content_type,
             headers={
-                "Cache-Control": "public, max-age=3600",
+                "Cache-Control": cache_control,
                 "Access-Control-Allow-Origin": "*",
                 "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
                 "Access-Control-Allow-Headers": "Range",
